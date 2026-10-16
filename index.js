@@ -1,59 +1,71 @@
 const http = require('http');
-
-// 1. Create a basic web server so hosting platforms know your app is alive
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('The Matchmaking Server is Running!');
+    res.end('Multiplayer Room Server Running!');
 });
 
-// 2. Attach Socket.io to allow instant, real-time communication
 const io = require('socket.io')(server, {
-    cors: { origin: "*" } // Allows players to connect from anywhere
+    cors: { origin: "*" }
 });
 
-let waitingPlayer = null;
+// Track up to 5 connected entities globally
+let players = {}; 
+const MAX_PLAYERS = 5;
 
-// 3. Listen for people connecting to your server
+// Keep track of which player numbers (1-5) are taken
+let availableNumbers =;
+
 io.on('connection', (socket) => {
-    console.log('A user connected:', socket.id);
+    console.log('User joined:', socket.id);
 
-    if (!waitingPlayer) {
-        // First person arrives: put them in the waiting room
-        waitingPlayer = socket;
-        socket.emit('status', 'Waiting for another person to join...');
-    } else {
-        // Second person arrives: grab the waiting person and pair them up!
-        const player1 = waitingPlayer;
-        const player2 = socket;
-        waitingPlayer = null; // Empty the waiting room for the next pair
-
-        // Create a unique, secret private room name for just these two players
-        const roomName = `room-${player1.id}-${player2.id}`;
-        player1.join(roomName);
-        player2.join(roomName);
-
-        // Tell both players they are successfully connected to each other
-        player1.emit('connected', { role: 'player1', room: roomName });
-        player2.emit('connected', { role: 'player2', room: roomName });
-
-        // Pass real-time data or game moves directly between the two paired players
-        player1.on('message', (data) => {
-            player1.to(roomName).emit('message', data);
-        });
-        player2.on('message', (data) => {
-            player2.to(roomName).emit('message', data);
-        });
+    // If lobby is entirely full, reject entry
+    if (Object.keys(players).length >= MAX_PLAYERS) {
+        socket.emit('lobbyFull');
+        socket.disconnect();
+        return;
     }
 
-    // Handle a player closing their browser tab or disconnecting
-    socket.on('disconnect', () => {
-        console.log('A user disconnected:', socket.id);
-        if (waitingPlayer === socket) {
-            waitingPlayer = null; // Clear the waiting room if they left
+    // Sort numbers so we always hand out the lowest free slot (P1, then P2, etc.)
+    availableNumbers.sort((a, b) => a - b);
+    const assignedNumber = availableNumbers.shift(); 
+
+    // Register player structure with dynamic spawn placements
+    players[socket.id] = {
+        id: socket.id,
+        playerNumber: assignedNumber,
+        x: 100 + (assignedNumber * 50), // Spawns squares separated out lineally
+        y: 250
+    };
+
+    // Broadcast updated dictionary mapping state to all browsers in lobby
+    io.emit('lobbyUpdate', players);
+
+    // Listen for movement sync signals
+    socket.on('move', (data) => {
+        if (players[socket.id]) {
+            players[socket.id].x = data.x;
+            players[socket.id].y = data.y;
+            // Broadcast location to everyone else
+            socket.broadcast.emit('playerMoved', {
+                id: socket.id,
+                x: data.x,
+                y: data.y
+            });
         }
+    });
+
+    // Cleanup states on browser dropouts
+    socket.on('disconnect', () => {
+        console.log('User left:', socket.id);
+        if (players[socket.id]) {
+            // Put their player number back into the pool for reuse
+            availableNumbers.push(players[socket.id].playerNumber);
+            delete players[socket.id];
+        }
+        io.emit('playerLeft', socket.id);
+        io.emit('lobbyUpdate', players); // Send fresh lobby state
     });
 });
 
-// 4. Start the server on the correct port required by cloud hosts
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server is active on port ${PORT}`));
+server.listen(PORT, () => console.log(`Server online on port ${PORT}`));
