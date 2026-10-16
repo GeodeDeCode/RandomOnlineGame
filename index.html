@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer Square Arena</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #111;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: sans-serif;
+            color: white;
+            overflow: hidden;
+        }
+        #gameCanvas {
+            border: 4px solid #333;
+            background-color: #222;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        #status {
+            margin-bottom: 15px;
+            font-size: 20px;
+            font-weight: bold;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px 20px;
+            border-radius: 6px;
+            border: 1px solid #444;
+        }
+    </style>
+    <!-- Imports Socket.io client to talk to your cloud server -->
+    <script src="https://socket.io"></script>
+</head>
+<body>
+
+    <div id="status">Connecting to matchmaking cloud...</div>
+    <canvas id="gameCanvas" width="600" height="600"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+
+        // IMPORTANT NOTE: Replace "http://localhost:3000" with your free Render web address once deployed!
+        const socket = io("http://localhost:3000"); 
+
+        let myId = null;
+        let myColor = 'white'; 
+        let players = {};
+        let matchesActive = false;
+
+        // Dynamic player color assignments mapping rules
+        const teamColors = {
+            1: 'red',
+            2: 'blue',
+            3: 'green',
+            4: 'purple',
+            5: 'yellow'
+        };
+
+        // Track user keyboard presses smoothly
+        const keyboardState = {};
+
+        socket.on('connect', () => {
+            myId = socket.id;
+            statusDiv.innerText = "Connected! Waiting for opponents...";
+        });
+
+        // Triggered every time someone joins or leaves the engine
+        socket.on('lobbyUpdate', (serverPlayers) => {
+            players = serverPlayers;
+            const currentCount = Object.keys(players).length;
+
+            // If 2 or more players are logged in, swap out of white "waiting mode" into true colors
+            if (currentCount >= 2) {
+                matchesActive = true;
+                statusDiv.innerText = `Lobby Active! Online: ${currentCount}/5`;
+                
+                if (players[myId]) {
+                    myColor = teamColors[players[myId].playerNumber] || 'grey';
+                }
+            } else {
+                matchesActive = false;
+                myColor = 'white'; 
+                statusDiv.innerText = "Lobby waiting: Need at least 2 players...";
+            }
+        });
+
+        socket.on('lobbyFull', () => {
+            statusDiv.innerText = "Access Denied: 5/5 players max limit reached.";
+        });
+
+        // Listen for positional updates broadcasted by other players
+        socket.on('playerMoved', (data) => {
+            if (players[data.id]) {
+                players[data.id].x = data.x;
+                players[data.id].y = data.y;
+            }
+        });
+
+        socket.on('playerLeft', (id) => {
+            delete players[id];
+        });
+
+        // Event hooks tracking window keystrokes
+        window.addEventListener('keydown', (e) => { keyboardState[e.code] = true; });
+        window.addEventListener('keyup', (e) => { keyboardState[e.code] = false; });
+
+        function processMovement() {
+            if (!players[myId]) return;
+
+            let didMove = false;
+            const speedSetting = 5;
+            const squareSize = 40;
+
+            if (keyboardState['ArrowUp'] && players[myId].y > 0) { players[myId].y -= speedSetting; didMove = true; }
+            if (keyboardState['ArrowDown'] && players[myId].y < canvas.height - squareSize) { players[myId].y += speedSetting; didMove = true; }
+            if (keyboardState['ArrowLeft'] && players[myId].x > 0) { players[myId].x -= speedSetting; didMove = true; }
+            if (keyboardState['ArrowRight'] && players[myId].x < canvas.width - squareSize) { players[myId].x += speedSetting; didMove = true; }
+
+            // Instantly sync coordinates out to the cloud server
+            if (didMove) {
+                socket.emit('move', { x: players[myId].x, y: players[myId].y });
+            }
+        }
+
+        function renderLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Cycle out and draw all registered square profiles
+            Object.keys(players).forEach(id => {
+                const p = players[id];
+                
+                if (id === myId) {
+                    ctx.fillStyle = myColor; // Displays white or assigned player color
+                } else {
+                    // Competitors turn into their target color if active, otherwise display white
+                    ctx.fillStyle = matchesActive ? (teamColors[p.playerNumber] || 'grey') : 'white';
+                }
+
+                ctx.fillRect(p.x, p.y, 40, 40);
+                
+                // Text floating name indicators
+                ctx.fillStyle = '#fff';
+                ctx.font = '12px sans-serif';
+                ctx.fillText(id === myId ? "You" : `Player ${p.playerNumber}`, p.x, p.y - 8);
+            });
+
+            processMovement();
+            requestAnimationFrame(renderLoop);
+        }
+
+        // Initialize frame loop engine
+        requestAnimationFrame(renderLoop);
+    </script>
+</body>
+</html>
