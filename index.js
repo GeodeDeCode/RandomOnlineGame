@@ -13,7 +13,7 @@ let players = {};
 const MAX_PLAYERS = 5;
 
 // Keep track of which player numbers (1-5) are taken
-let availableNumbers =;
+let availableNumbers = [1,2,3,4,5]
 
 io.on('connection', (socket) => {
     console.log('User joined:', socket.id);
